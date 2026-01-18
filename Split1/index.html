@@ -94,46 +94,61 @@
 
       var fileProgress = dataParts.map(() => ({ loaded: 0, total: 0 }));
 
-      function downloadPart(url, index) {
-        return new Promise((resolve, reject) => {
-          var xhr = new XMLHttpRequest();
-          xhr.open("GET", url, true);
-          xhr.responseType = "arraybuffer";
-          
-          xhr.onprogress = function(e) {
-            if (e.lengthComputable) {
-              fileProgress[index].loaded = e.loaded;
-              fileProgress[index].total = e.total;
-              updateTotalDownloadProgress();
-            }
-          };
+      async function downloadPart(url, index) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Failed to fetch " + url);
 
-          xhr.onload = function() {
-            if (xhr.status === 200) {
-              resolve(xhr.response);
-            } else {
-              reject("Failed to load part: " + url);
-            }
-          };
+  const reader = response.body.getReader();
+  const contentLength = +response.headers.get("Content-Length") || 0;
 
-          xhr.onerror = function() { reject("Network error: " + url); };
-          xhr.send();
-        });
-      }
+  let receivedLength = 0;
+  let chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    receivedLength += value.length;
+
+    fileProgress[index].loaded = receivedLength;
+    fileProgress[index].total = contentLength; // may be 0 — handled below
+    updateTotalDownloadProgress();
+  }
+
+  const buffer = new Uint8Array(receivedLength);
+  let position = 0;
+  for (let chunk of chunks) {
+    buffer.set(chunk, position);
+    position += chunk.length;
+  }
+
+  return buffer.buffer;
+}
 
       function updateTotalDownloadProgress() {
-        var totalLoaded = 0;
-        var totalSize = 0;
-        fileProgress.forEach(part => {
-          totalLoaded += part.loaded;
-          totalSize += part.total;
-        });
+  let totalLoaded = 0;
+  let totalSize = 0;
+  let hasSizeInfo = true;
 
-        if (totalSize > 0) {
-          var percent = (totalLoaded / totalSize) * 100;
-          updateLoadingUI(percent, "Downloading Data...");
-        }
-      }
+  fileProgress.forEach(part => {
+    totalLoaded += part.loaded;
+    if (part.total > 0) {
+      totalSize += part.total;
+    } else {
+      hasSizeInfo = false;
+    }
+  });
+
+  if (hasSizeInfo && totalSize > 0) {
+    const percent = (totalLoaded / totalSize) * 100;
+    updateLoadingUI(percent, "Downloading Data...");
+  } else {
+    // Fallback: show bytes downloaded instead
+    const mb = (totalLoaded / (1024 * 1024)).toFixed(1);
+    loadingText.textContent = "Downloading Data... " + mb + " MB";
+  }
+}
+
 
       async function mergeDataChunks(urls) {
           updateLoadingUI(0, "Starting Download...");

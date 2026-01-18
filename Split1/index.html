@@ -6,6 +6,18 @@
     <title>Unity Web Player | Exhibit_DEMO</title>
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
+    <style>
+      /* --- NEW CSS FOR LOADING TEXT --- */
+      #unity-loading-text {
+        color: white;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        text-align: center;
+        margin-top: 10px;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px black;
+      }
+    </style>
   </head>
   <body>
     <div id="unity-container" class="unity-desktop">
@@ -15,6 +27,7 @@
         <div id="unity-progress-bar-empty">
           <div id="unity-progress-bar-full"></div>
         </div>
+        <div id="unity-loading-text">Preparing...</div>
       </div>
       <div id="unity-warning"> </div>
       <div id="unity-footer">
@@ -25,6 +38,16 @@
     </div>
     <script>
       var canvas = document.querySelector("#unity-canvas");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var loadingBar = document.querySelector("#unity-loading-bar");
+      var loadingText = document.querySelector("#unity-loading-text");
+
+      // --- HELPER TO UPDATE UI ---
+      function updateLoadingUI(percent, stageText) {
+        var roundedPercent = Math.round(percent);
+        progressBarFull.style.width = percent + "%";
+        loadingText.textContent = stageText + " " + roundedPercent + "%";
+      }
 
       function unityShowBanner(msg, type) {
         var warningBanner = document.querySelector("#unity-warning");
@@ -48,10 +71,9 @@
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/DC1.loader.js";
       
-      // --- CONFIGURATION ---
       var config = {
         arguments: [],
-        dataUrl: "", // We will set this dynamically later!
+        dataUrl: "", // Dynamic
         frameworkUrl: buildUrl + "/DC1.framework.js",
         codeUrl: buildUrl + "/DC1.wasm",
         streamingAssetsUrl: "StreamingAssets",
@@ -61,21 +83,66 @@
         showBanner: unityShowBanner,
       };
 
-      // --- CUSTOM SPLIT LOADING LOGIC ---
-      
-      // 1. List your parts here. Make sure these match your actual filenames in the Build folder!
+      // --- CONFIG: LIST YOUR PARTS HERE ---
+      // IMPORTANT: Rename your actual files to match these exact names!
       var dataParts = [
           buildUrl + "/DC1.data.part001",
           buildUrl + "/DC1.data.part002",
-          buildUrl + "/DC1.data.part003" 
-          // Add "/DC1.data.part4" here if needed...
+          buildUrl + "/DC1.data.part003"
       ];
+      // ------------------------------------
 
-      // 2. The function to merge parts
+      var fileProgress = dataParts.map(() => ({ loaded: 0, total: 0 }));
+
+      function downloadPart(url, index) {
+        return new Promise((resolve, reject) => {
+          var xhr = new XMLHttpRequest();
+          xhr.open("GET", url, true);
+          xhr.responseType = "arraybuffer";
+          
+          xhr.onprogress = function(e) {
+            if (e.lengthComputable) {
+              fileProgress[index].loaded = e.loaded;
+              fileProgress[index].total = e.total;
+              updateTotalDownloadProgress();
+            }
+          };
+
+          xhr.onload = function() {
+            if (xhr.status === 200) {
+              resolve(xhr.response);
+            } else {
+              reject("Failed to load part: " + url);
+            }
+          };
+
+          xhr.onerror = function() { reject("Network error: " + url); };
+          xhr.send();
+        });
+      }
+
+      function updateTotalDownloadProgress() {
+        var totalLoaded = 0;
+        var totalSize = 0;
+        fileProgress.forEach(part => {
+          totalLoaded += part.loaded;
+          totalSize += part.total;
+        });
+
+        if (totalSize > 0) {
+          var percent = (totalLoaded / totalSize) * 100;
+          updateLoadingUI(percent, "Downloading Data...");
+        }
+      }
+
       async function mergeDataChunks(urls) {
-          console.log("Beginning manual download of data parts...");
-          const responses = await Promise.all(urls.map(url => fetch(url)));
-          const buffers = await Promise.all(responses.map(res => res.arrayBuffer()));
+          updateLoadingUI(0, "Starting Download...");
+          
+          // 1. Download
+          const buffers = await Promise.all(urls.map((url, index) => downloadPart(url, index)));
+          
+          // 2. Merge
+          loadingText.textContent = "Merging Files...";
           
           const totalLength = buffers.reduce((acc, buf) => acc + buf.byteLength, 0);
           const mergedArray = new Uint8Array(totalLength);
@@ -84,13 +151,11 @@
           buffers.forEach((buf, index) => {
               mergedArray.set(new Uint8Array(buf), offset);
               offset += buf.byteLength;
-              buffers[index] = null; // Help Garbage Collector
+              buffers[index] = null; 
           });
           
-          console.log("Parts merged. Total size: " + totalLength);
           return mergedArray;
       }
-      // ----------------------------------
 
       if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
         var meta = document.createElement('meta');
@@ -104,34 +169,28 @@
         canvas.style.height = "540px";
       }
 
-      document.querySelector("#unity-loading-bar").style.display = "block";
+      loadingBar.style.display = "block";
 
       var script = document.createElement("script");
       script.src = loaderUrl;
       script.onload = () => {
         
-        // CALL THE MERGE FUNCTION BEFORE UNITY STARTS
         mergeDataChunks(dataParts).then((mergedData) => {
             
-            // Create the Blob
             var blob = new Blob([mergedData]);
             var blobUrl = URL.createObjectURL(blob);
-            
-            // Free the array memory
-            mergedData = null;
+            mergedData = null; 
 
-            // Inject the Blob URL into Unity's config
             config.dataUrl = blobUrl;
-
-            // Now start Unity normally
+            
+            // 3. Initialize Unity
             createUnityInstance(canvas, config, (progress) => {
-              document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
+              // This progress comes from Unity (WASM compilation, scene loading)
+              // progress is 0.0 to 1.0, so multiply by 100
+              updateLoadingUI(progress * 100, "Initializing Engine...");
             }).then((unityInstance) => {
               
-              // Clean up loading UI
-              document.querySelector("#unity-loading-bar").style.display = "none";
-              
-              // Revoke the Blob URL to free more memory
+              loadingBar.style.display = "none";
               URL.revokeObjectURL(blobUrl);
 
               document.querySelector("#unity-fullscreen-button").onclick = () => {
@@ -143,12 +202,12 @@
 
         }).catch((err) => {
             console.error(err);
-            alert("Failed to load data parts. Check console for details.");
+            loadingText.textContent = "Error: " + err;
+            loadingText.style.color = "red";
         });
       };
 
       document.body.appendChild(script);
-
     </script>
   </body>
 </html>

@@ -1,0 +1,5 @@
+disable art 3d object
+
+complete wall layout build test with image penal seperate(1024) instead of big wall texture
+test occlusion culling bake
+
